@@ -1,0 +1,22 @@
+{
+  "name": "fizzy-md-selfhost",
+  "version": "1.0.0",
+  "description": "Fizzy-md with self-hosted Fizzy support",
+  "private": true,
+  "scripts": {
+    "prepare": "husky",
+    "commitlint": "commitlint --from=HEAD~1"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.0.0",
+    "@commitlint/config-conventional": "^19.0.0",
+    "husky": "^9.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:patronous-cmd/fizzy-md.git"
+  },
+  "keywords": ["fizzy", "markdown", "self-hosted"],
+  "author": "patronous-cmd",
+  "license": "MIT"
+}
