@@ -15,7 +15,7 @@ import (
 	"github.com/yuin/goldmark/renderer/html"
 )
 
-var version = "dev" // Set by GoReleaser at build time
+var version = "dev-selfhost" // Self-hosted version
 
 // Markdown to HTML converter using goldmark
 var md goldmark.Markdown
@@ -30,6 +30,34 @@ func init() {
 			html.WithUnsafe(), // Allow raw HTML passthrough
 		),
 	)
+}
+
+// Self-hosted configuration from environment
+type SelfHostConfig struct {
+	Enabled    bool
+	WrapperPath string  // Path to wrapper script (e.g., fizzy-local)
+	APIUrl     string   // Direct API URL (e.g., http://localhost:3000)
+	Account    string   // Account slug
+	Board      string   // Default board name
+	DockerContainer string // Docker container name
+}
+
+func getSelfHostConfig() SelfHostConfig {
+	return SelfHostConfig{
+		Enabled:         os.Getenv("FIZZY_SELFHOST") == "true",
+		WrapperPath:     os.Getenv("FIZZY_WRAPPER_PATH"),
+		APIUrl:          os.Getenv("FIZZY_API_URL"),
+		Account:         os.Getenv("FIZZY_ACCOUNT"),
+		Board:           getEnvOrDefault("FIZZY_BOARD", "AI Agents Workspace"),
+		DockerContainer: getEnvOrDefault("FIZZY_DOCKER_CONTAINER", "fizzy-web-1"),
+	}
+}
+
+func getEnvOrDefault(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return defaultVal
 }
 
 // convertMarkdownToHTML converts Markdown text to HTML
@@ -128,6 +156,34 @@ func processArgs(args []string) ([]string, error) {
 	}
 
 	return result, nil
+}
+
+// executeSelfHost runs commands via wrapper script for self-hosted Fizzy
+func executeSelfHost(config SelfHostConfig, args []string) error {
+	// Determine the executable to use
+	execPath := config.WrapperPath
+	if execPath == "" {
+		// Default wrapper path
+		execPath = "~/.local/bin/fizzy-local"
+	}
+
+	// Check if wrapper exists
+	if _, err := os.Stat(execPath); err != nil {
+		return fmt.Errorf("self-hosted wrapper not found at %s: %w", execPath, err)
+	}
+
+	cmd := exec.Command(execPath, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		return fmt.Errorf("wrapper execution failed: %w", err)
+	}
+	return nil
 }
 
 // findFizzy locates the real fizzy binary, avoiding circular resolution.
@@ -243,7 +299,22 @@ func main() {
 
 	// Handle --version flag
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
-		fmt.Printf("fizzy-md version %s\n", version)
+		fmt.Printf("fizzy-md version %s (self-hosted support)\n", version)
+		fmt.Println("Self-hosted mode: FIZZY_SELFHOST=true")
+		fmt.Println("Wrapper path: FIZZY_WRAPPER_PATH=/path/to/fizzy-local")
+		os.Exit(0)
+	}
+
+	// Handle --selfhost-info flag for diagnostics
+	if len(args) == 1 && args[0] == "--selfhost-info" {
+		config := getSelfHostConfig()
+		fmt.Println("Self-Hosted Configuration:")
+		fmt.Printf("  Enabled: %v\n", config.Enabled)
+		fmt.Printf("  Wrapper Path: %s\n", config.WrapperPath)
+		fmt.Printf("  API URL: %s\n", config.APIUrl)
+		fmt.Printf("  Account: %s\n", config.Account)
+		fmt.Printf("  Board: %s\n", config.Board)
+		fmt.Printf("  Docker Container: %s\n", config.DockerContainer)
 		os.Exit(0)
 	}
 
@@ -276,11 +347,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Check for self-hosted mode
+	config := getSelfHostConfig()
+	if config.Enabled {
+		if err := executeSelfHost(config, processedArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "fizzy-md self-hosted error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	// Find fizzy executable, avoiding circular resolution back to ourselves
 	fizzyPath := findFizzy()
 	if fizzyPath == "" {
 		fmt.Fprintf(os.Stderr, "fizzy-md error: fizzy command not found\n")
 		fmt.Fprintf(os.Stderr, "Set FIZZY_PATH or install fizzy-cli: https://github.com/robzolkos/fizzy-cli\n")
+		fmt.Fprintf(os.Stderr, "For self-hosted Fizzy, set FIZZY_SELFHOST=true\n")
 		os.Exit(1)
 	}
 
