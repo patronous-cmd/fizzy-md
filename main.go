@@ -15,7 +15,7 @@ import (
 	"github.com/yuin/goldmark/renderer/html"
 )
 
-var version = "dev-selfhost" // Self-hosted version
+var version = "dev" // Unified version - supports both cloud and self-hosted
 
 // Markdown to HTML converter using goldmark
 var md goldmark.Markdown

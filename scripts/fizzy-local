@@ -1,0 +1,232 @@
+#!/bin/bash
+# fizzy-local - Wrapper for self-hosted Fizzy instance
+# Translates fizzy-md commands to Rails commands
+
+set -e
+
+FIZZY_CONTAINER="fizzy-web-1"
+BOARD_NAME="${FIZZY_BOARD:-AI Agents Workspace}"
+
+# Helper function to run rails commands
+rails_run() {
+    docker exec $FIZZY_CONTAINER /rails/bin/rails runner "$1" 2>&1
+}
+
+# Parse command
+CMD="$1"
+shift
+
+case "$CMD" in
+    board)
+        case "$1" in
+            list)
+                rails_run "
+board = Board.find_by(name: '$BOARD_NAME') || Board.first
+puts 'Board: ' + board.name
+puts 'ID: ' + board.id.to_s
+puts 'Columns: ' + board.columns.map(&:name).join(', ')
+puts 'Cards: ' + board.cards.count.to_s
+"
+                ;;
+            show)
+                rails_run "
+board = Board.find_by(name: '$BOARD_NAME') || Board.first
+puts 'Name: ' + board.name
+puts 'ID: ' + board.id.to_s
+puts 'Columns:'
+board.columns.each { |c| puts '  - ' + c.name + ' (' + c.cards.count.to_s + ' cards)' }
+puts 'Cards:'
+board.cards.each { |c| status = c.closed_at ? 'CLOSED' : 'OPEN'; puts '  #' + c.number.to_s + ' [' + status + '] [' + c.column.name + '] ' + c.title }
+"
+                ;;
+            *)
+                echo "Usage: fizzy-local board [list|show]"
+                ;;
+        esac
+        ;;
+    
+    card)
+        case "$1" in
+            list)
+                rails_run "
+board = Board.find_by(name: '$BOARD_NAME') || Board.first
+board.cards.each do |card|
+  status = card.closed_at ? 'CLOSED' : 'OPEN'
+  puts '#' + card.number.to_s + ' | ' + status + ' | ' + card.column.name + ' | ' + card.title
+end
+"
+                ;;
+            
+            create)
+                TITLE=""
+                BODY=""
+                COLUMN="To Do"
+                
+                while [[ $# -gt 0 ]]; do
+                    case "$1" in
+                        --title|-t)
+                            TITLE="$2"
+                            shift 2
+                            ;;
+                        --body|-b)
+                            BODY="$2"
+                            shift 2
+                            ;;
+                        --column|-c)
+                            COLUMN="$2"
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+                
+                if [ -z "$TITLE" ]; then
+                    echo "Error: --title required"
+                    exit 1
+                fi
+                
+                # Convert Markdown to HTML (basic conversion)
+                BODY_HTML=$(echo "$BODY" | sed -E 's/\*\*([^*]+)\*\*/<strong>\1<\/strong>/g' | sed -E 's/\*([^*]+)\*/<em>\1<\/em>/g')
+                
+                rails_run "
+board = Board.find_by(name: '$BOARD_NAME') || Board.first
+column = board.columns.find_by(name: '$COLUMN') || board.columns.first
+user = User.last
+
+card = Card.create!(
+  board: board,
+  column: column,
+  title: '$TITLE',
+  description: '$BODY_HTML',
+  creator: user
+)
+puts 'Created: #' + card.number.to_s + ' - ' + card.title
+puts 'Column: ' + card.column.name
+puts 'ID: ' + card.id.to_s
+"
+                ;;
+            
+            show)
+                CARD_NUM="$2"
+                rails_run "
+board = Board.find_by(name: '$BOARD_NAME') || Board.first
+card = board.cards.find_by(number: $CARD_NUM)
+if card
+  puts 'Card #' + card.number.to_s
+  puts 'Title: ' + card.title
+  puts 'Status: ' + (card.closed_at ? 'CLOSED' : 'OPEN')
+  puts 'Column: ' + card.column.name
+  puts 'ID: ' + card.id.to_s
+  puts 'Description: ' + (card.description || 'None')
+else
+  puts 'Card not found'
+end
+"
+                ;;
+            
+            move)
+                CARD_NUM="$2"
+                COLUMN="$3"
+                rails_run "
+board = Board.find_by(name: '$BOARD_NAME') || Board.first
+card = board.cards.find_by(number: $CARD_NUM)
+column = board.columns.find_by(name: '$COLUMN')
+if card && column
+  card.update!(column: column)
+  puts 'Moved #' + card.number.to_s + ' to: ' + column.name
+else
+  puts 'Card or column not found'
+end
+"
+                ;;
+            
+            close)
+                CARD_NUM="$2"
+                rails_run "
+board = Board.find_by(name: '$BOARD_NAME') || Board.first
+card = board.cards.find_by(number: $CARD_NUM)
+if card
+  card.update!(closed_at: Time.current)
+  puts 'Closed #' + card.number.to_s + ' - ' + card.title
+else
+  puts 'Card not found'
+end
+"
+                ;;
+            
+            reopen)
+                CARD_NUM="$2"
+                rails_run "
+board = Board.find_by(name: '$BOARD_NAME') || Board.first
+card = board.cards.find_by(number: $CARD_NUM)
+if card
+  card.update!(closed_at: nil)
+  puts 'Reopened #' + card.number.to_s + ' - ' + card.title
+else
+  puts 'Card not found'
+end
+"
+                ;;
+            
+            *)
+                echo "Usage: fizzy-local card [list|create|show|move|close|reopen]"
+                echo "  create --title 'Title' --body 'Description' --column 'Column'"
+                echo "  show <number>"
+                echo "  move <number> <column>"
+                echo "  close <number>"
+                echo "  reopen <number>"
+                ;;
+        esac
+        ;;
+    
+    comment)
+        case "$1" in
+            add)
+                CARD_NUM="$2"
+                BODY="$3"
+                # Note: Comments may be disabled on some cards
+                echo "Note: Comments require card to allow comments (web UI setting)"
+                ;;
+            *)
+                echo "Usage: fizzy-local comment add <card_num> <body>"
+                ;;
+        esac
+        ;;
+    
+    status)
+        rails_run "
+user = User.last
+account = Account.last
+board = Board.find_by(name: '$BOARD_NAME') || Board.first
+puts 'User: ' + user.name
+puts 'Account: ' + account.name
+puts 'Board: ' + board.name + ' (' + board.cards.count.to_s + ' cards)'
+puts 'Columns: ' + board.columns.map { |c| c.name + '(' + c.cards.count.to_s + ')' }.join(', ')
+"
+        ;;
+    
+    help|--help|-h)
+        echo "fizzy-local - Self-hosted Fizzy CLI wrapper"
+        echo ""
+        echo "Commands:"
+        echo "  board list          List boards"
+        echo "  board show          Show board details"
+        echo "  card list           List all cards"
+        echo "  card create         Create new card"
+        echo "  card show <num>     Show card details"
+        echo "  card move <num> <col> Move card to column"
+        echo "  card close <num>    Close card"
+        echo "  card reopen <num>   Reopen closed card"
+        echo "  status              Show system status"
+        echo ""
+        echo "Environment:"
+        echo "  FIZZY_BOARD         Board name (default: AI Agents Workspace)"
+        ;;
+    
+    *)
+        echo "Unknown command: $CMD"
+        echo "Run 'fizzy-local help' for usage"
+        ;;
+esac
