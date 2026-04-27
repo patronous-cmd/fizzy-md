@@ -163,8 +163,12 @@ func executeSelfHost(config SelfHostConfig, args []string) error {
 	// Determine the executable to use
 	execPath := config.WrapperPath
 	if execPath == "" {
-		// Default wrapper path
-		execPath = "~/.local/bin/fizzy-local"
+		// Default wrapper path in user's ~/.local/bin
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("cannot determine user home directory: %w", err)
+		}
+		execPath = filepath.Join(homeDir, ".local", "bin", "fizzy-local")
 	}
 
 	// Check if wrapper exists
